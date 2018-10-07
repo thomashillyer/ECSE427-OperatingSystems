@@ -6,6 +6,7 @@
 #include <sys/types.h> //for fork
 #include <unistd.h> //for fork and vfork
 #include <sys/wait.h> //for waitpid
+#include <time.h> //for timing
 
 #define STACK_SIZE (1024 * 1024) //random size 
 
@@ -40,9 +41,28 @@ void parseCommand(char* line, char** args) {
 	//dont need to return args because it was passed by reference
 }
 
+static int childFunc(void* arg) { //startup function for cloned child
+	printf("child process arg = %s\n", (char *)arg);
+	// you are in the child
+	//store the pid so it can be killed with ctrl c
+	recentPID = getpid();
+	if (execvp(args[0], args) < 0) {
+		perror("ERROR: failure in execvp");
+	}
+	//from handout
+	// if (close(*((int *) arg)) == -1) {
+	// 	errExit("close");
+	// }
+	return 0; //child terminates now
+}
+
 int clone_function(void* arg) {
 	char *stack; //points to bottom
 	char *stackTop; //points to top
+
+	int flags = CLONE_VM | CLONE_FS | CLONE_FILES | CLONE_SIGHAND | CLONE_THREAD | CLONE_SETTLS | CLONE_PARENT_SETTID | CLONE_CHILD_CLEARTID | CLONE_SYSVSEM | CLONE_DETACHED;
+
+	// printf("%d\n", flags);
 
 	char *str = "Hello World\n";
 
@@ -60,7 +80,7 @@ int clone_function(void* arg) {
 	printf("parent pid = %d\n", getpid());
 	// the clone command uses childfunc as the starting function, the child terminates when the childfunc terminates
 	//if ((pid = clone(childFunc, stackTop, flags | SIGCHLD, (void *) &fd)) == -1) {
-	if ((pid = clone(childFunc, stackTop, flags | SIGCHLD, str)) == -1) {
+	if ((pid = clone(childFunc, stackTop, flags , str)) == -1) {
 		fprintf(stderr,  "ERROR with clone\n");
 		free(stack);
 		exit(1);
@@ -69,17 +89,8 @@ int clone_function(void* arg) {
 	printf("child pid = %d\n", pid);
 	waitpid(pid, &status, 0);
 	printf("done\n");
+	sleep(1);
 	return 0;
-}
-
-static int childFunc(void* arg) { //startup function for cloned child
-	printf("child process arg = %s\n", (char *)arg);
-	sleep(2);
-	//from handout
-	// if (close(*((int *) arg)) == -1) {
-	// 	errExit("close");
-	// }
-	return 0; //child terminates now
 }
 
 /*my_system is a functions that create a child process and
@@ -131,6 +142,30 @@ int my_systemV(char** args) {
 	struct timespec start, finish;
 	char* envp[] = {"key=value", '\0'};
 
+	char* args[512];
+	//parse
+	parseCommand(line, args);
+	//hijack process to exit on exit and change directory on cd
+	//since these are not executable commands in the regular sense
+	if (strcmp(*args, "exit") == 0) {
+		exit(0);
+	}
+	// TODO: this is the wrong way to do this (works but doesnt have the expected behaviour with clone)
+	else if (strcmp(*args, "cd") == 0) {
+		//allow soft fails through return statements instead of exit
+		if (args[1] == NULL) {
+			printf("%s\n", "ERROR: missing cd arg");
+			return 1;
+		} else {
+			if (chdir(args[1]) != 0) {
+				perror("ERROR: could not change directory");
+				return 1;
+			}
+			//cd is the command, dont attempt to exec after
+			return 0;
+		}
+	}
+
 	//prepend "/bin/" so that commands can be found
 	char* base;
 	char* newCmd;
@@ -175,30 +210,31 @@ int my_systemV(char** args) {
 }
 
 int my_system(char* line) {
+	//signal handler to hijack ctrl+c
 	signal(SIGINT, intHandler);
-	char* args[512];
-	//parse
-	parseCommand(line, args);
-	//hijack process to exit on exit and change directory on cd
-	//since these are not executable commands in the regular sense
-	if (strcmp(*args, "exit") == 0) {
-		exit(0);
-	}
-	// TODO: this is the wrong way to do this (works but doesnt have the expected behaviour with clone)
-	else if (strcmp(*args, "cd") == 0) {
-		//allow soft fails through return statements instead of exit
-		if (args[1] == NULL) {
-			printf("%s\n", "ERROR: missing cd arg");
-			return 1;
-		} else {
-			if (chdir(args[1]) != 0) {
-				perror("ERROR: could not change directory");
-				return 1;
-			}
-			//cd is the command, dont attempt to exec after
-			return 0;
-		}
-	}
+	// char* args[512];
+	// //parse
+	// parseCommand(line, args);
+	// //hijack process to exit on exit and change directory on cd
+	// //since these are not executable commands in the regular sense
+	// if (strcmp(*args, "exit") == 0) {
+	// 	exit(0);
+	// }
+	// // TODO: this is the wrong way to do this (works but doesnt have the expected behaviour with clone)
+	// else if (strcmp(*args, "cd") == 0) {
+	// 	//allow soft fails through return statements instead of exit
+	// 	if (args[1] == NULL) {
+	// 		printf("%s\n", "ERROR: missing cd arg");
+	// 		return 1;
+	// 	} else {
+	// 		if (chdir(args[1]) != 0) {
+	// 			perror("ERROR: could not change directory");
+	// 			return 1;
+	// 		}
+	// 		//cd is the command, dont attempt to exec after
+	// 		return 0;
+	// 	}
+	// }
 #ifdef FORK
 	my_systemF(args);
 #elif VFORK
@@ -227,7 +263,7 @@ int main() {
 			// printf("%s\n", "No line");
 			//exit or print error
 			perror("ERROR: ");// not sure what to do here
-			exit(0); //should probably be exit(1)
+			exit(1); //should probably be exit(1)
 		}
 		if (strlen(line) > sizeof(char)) {
 			my_system(line);
