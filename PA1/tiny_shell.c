@@ -7,6 +7,8 @@
 #include <unistd.h> //for fork and vfork
 #include <sys/wait.h> //for waitpid
 
+#define STACK_SIZE (1024 * 1024) //random size 
+
 int recentPID = 0;
 
 void intHandler(int SIG) {
@@ -38,7 +40,47 @@ void parseCommand(char* line, char** args) {
 	//dont need to return args because it was passed by reference
 }
 
-int clone_function(void* arg);
+int clone_function(void* arg) {
+	char *stack; //points to bottom
+	char *stackTop; //points to top
+
+	char *str = "Hello World\n";
+
+	pid_t pid; //for waitpid
+	int status; //for waitpid
+
+
+	stack = (char *) malloc(STACK_SIZE);
+
+	if (stack == NULL) {
+		fprintf(stderr,  "ERROR with malloc\n");
+		exit(1);
+	}
+	stackTop = stack + STACK_SIZE - 1; // assuming stack grows down, -1 to prevent overflow
+	printf("parent pid = %d\n", getpid());
+	// the clone command uses childfunc as the starting function, the child terminates when the childfunc terminates
+	//if ((pid = clone(childFunc, stackTop, flags | SIGCHLD, (void *) &fd)) == -1) {
+	if ((pid = clone(childFunc, stackTop, flags | SIGCHLD, str)) == -1) {
+		fprintf(stderr,  "ERROR with clone\n");
+		free(stack);
+		exit(1);
+	}
+
+	printf("child pid = %d\n", pid);
+	waitpid(pid, &status, 0);
+	printf("done\n");
+	return 0;
+}
+
+static int childFunc(void* arg) { //startup function for cloned child
+	printf("child process arg = %s\n", (char *)arg);
+	sleep(2);
+	//from handout
+	// if (close(*((int *) arg)) == -1) {
+	// 	errExit("close");
+	// }
+	return 0; //child terminates now
+}
 
 /*my_system is a functions that create a child process and
 runs the command you passed as the argument*/
@@ -162,7 +204,7 @@ int my_system(char* line) {
 #elif VFORK
 	my_systemV(args);
 #elif CLONE
-	my_systemC(line); //something
+	clone_function(args); //something
 #elif PIPE
 	//something
 #else
