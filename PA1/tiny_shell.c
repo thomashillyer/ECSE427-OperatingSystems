@@ -100,6 +100,30 @@ int my_systemF(char** args) {
 	//this is 0 in the child process
 	int status;
 
+	char* args[512];
+	//parse
+	parseCommand(line, args);
+	//hijack process to exit on exit and change directory on cd
+	//since these are not executable commands in the regular sense
+	if (strcmp(*args, "exit") == 0) {
+		exit(0);
+	}
+	// TODO: this is the wrong way to do this (works but doesnt have the expected behaviour with clone)
+	else if (strcmp(*args, "cd") == 0) {
+		//allow soft fails through return statements instead of exit
+		if (args[1] == NULL) {
+			printf("%s\n", "ERROR: missing cd arg");
+			return 1;
+		} else {
+			if (chdir(args[1]) != 0) {
+				perror("ERROR: could not change directory");
+				return 1;
+			}
+			//cd is the command, dont attempt to exec after
+			return 0;
+		}
+	}
+
 	//printf("Fork line: %s\n", *args);
 
 	if ((pid = fork()) == -1) { //maybe less than 0
