@@ -41,56 +41,95 @@ void parseCommand(char* line, char** args) {
 	//dont need to return args because it was passed by reference
 }
 
-static int childFunc(void* arg) { //startup function for cloned child
-	printf("child process arg = %s\n", (char *)arg);
+static int child_function(void* arg) { //startup function for cloned child
+	//printf is not thread safe
+	char ** newargs = (char **) arg;
+	// write(1, newargs[0], strlen(newargs[0])); //seems to also cause a seg fault, no longer causing seg fault?
+	// sleep(2);
 	// you are in the child
+
+	//hijack process to exit on exit and change directory on cd
+	//since these are not executable commands in the regular sense
+	if (strcmp(*newargs, "exit") == 0) {
+		_exit(0);
+	}
+	else if (strcmp(*newargs, "cd") == 0) {
+		//allow soft fails through return statements instead of exit
+		if (newargs[1] == NULL) {
+			printf("%s\n", "ERROR: missing cd arg");
+			return 1;
+		} else {
+			if (chdir(newargs[1]) != 0) {
+				perror("ERROR: could not change directory");
+				return 1;
+			}
+			//cd is the command, dont attempt to exec after
+			return 0;
+		}
+	}
 	//store the pid so it can be killed with ctrl c
-	recentPID = getpid();
-	if (execvp(args[0], args) < 0) {
+	// recentPID = getpid();
+	if (execvp(newargs[0], newargs) < 0) {
 		perror("ERROR: failure in execvp");
+		_exit(1);
 	}
 	//from handout
 	// if (close(*((int *) arg)) == -1) {
 	// 	errExit("close");
 	// }
-	return 0; //child terminates now
+	// return 0; //child terminates now
 }
 
-int clone_function(void* arg) {
+int clone_function(void* line) {
+
+	char* args[512];
+	//parse
+	parseCommand(line, args);
+
 	char *stack; //points to bottom
 	char *stackTop; //points to top
 
-	int flags = CLONE_VM | CLONE_FS | CLONE_FILES | CLONE_SIGHAND | CLONE_THREAD | CLONE_SETTLS | CLONE_PARENT_SETTID | CLONE_CHILD_CLEARTID | CLONE_SYSVSEM | CLONE_DETACHED;
-
-	// printf("%d\n", flags);
-
-	char *str = "Hello World\n";
+	int flags = CLONE_VM | // child runs in same memory space as caller
+	            CLONE_FS | //child shares filesystem info (for use with chdir)
+	            CLONE_FILES | //child shares file descriptor table
+	            CLONE_SIGHAND | //child shares signal handler table
+	            CLONE_THREAD;// | //child is placed in the same thread group as caller (must be with clone_sighand and clone_vm)
+	CLONE_SETTLS | //thread local storage descriptor is set to newtls
+	CLONE_PARENT_SETTID | //store child thread id @ ptid in parent
+	CLONE_CHILD_CLEARTID | //store child thread id @ ctid in child
+	CLONE_SYSVSEM; //child shares sys V semaphore adjustment vals with caller
 
 	pid_t pid; //for waitpid
 	int status; //for waitpid
 
 
-	stack = (char *) malloc(STACK_SIZE);
+	stack = (char *) malloc(STACK_SIZE); //allocate memory for stack
 
 	if (stack == NULL) {
+		//failed to allocate
 		fprintf(stderr,  "ERROR with malloc\n");
 		exit(1);
 	}
-	stackTop = stack + STACK_SIZE - 1; // assuming stack grows down, -1 to prevent overflow
-	printf("parent pid = %d\n", getpid());
+	stackTop = stack + STACK_SIZE; // assuming stack grows down, -1 to prevent overflow
+	// printf("parent pid = %d\n", getpid());
 	// the clone command uses childfunc as the starting function, the child terminates when the childfunc terminates
-	//if ((pid = clone(childFunc, stackTop, flags | SIGCHLD, (void *) &fd)) == -1) {
-	if ((pid = clone(childFunc, stackTop, flags , str)) == -1) {
+	//if ((pid = clone(child_function, stackTop, flags | SIGCHLD, (void *) &fd)) == -1) {
+	if ((pid = clone(child_function, stackTop, flags | SIGCHLD, args)) == -1) {
 		fprintf(stderr,  "ERROR with clone\n");
 		free(stack);
 		exit(1);
 	}
-
-	printf("child pid = %d\n", pid);
-	waitpid(pid, &status, 0);
-	printf("done\n");
-	sleep(1);
+	// else {
+	// printf("child pid = %d\n", pid);
+	// do {
+		waitpid(pid, &status, __WCLONE);
+	// } while (!WIFEXITED(status));
+	// waitpid(pid, &status, 0);
+	// printf("done\n");
+	// sleep(5);
 	return 0;
+	// }
+	// return 1;
 }
 
 /*my_system is a functions that create a child process and
@@ -103,40 +142,24 @@ int my_systemF(char* line) {
 	char* args[512];
 	//parse
 	parseCommand(line, args);
+
 	//hijack process to exit on exit and change directory on cd
 	//since these are not executable commands in the regular sense
 	if (strcmp(*args, "exit") == 0) {
-		exit(0);
+		exit(0); //not actually in the child so use the regular exit
 	}
-	// TODO: this is the wrong way to do this (works but doesnt have the expected behaviour with clone)
-	else if (strcmp(*args, "cd") == 0) {
-		//allow soft fails through return statements instead of exit
-		if (args[1] == NULL) {
-			printf("%s\n", "ERROR: missing cd arg");
-			return 1;
-		} else {
-			if (chdir(args[1]) != 0) {
-				perror("ERROR: could not change directory");
-				return 1;
-			}
-			//cd is the command, dont attempt to exec after
-			return 0;
-		}
-	}
-
-	//printf("Fork line: %s\n", *args);
-
 	if ((pid = fork()) == -1) { //maybe less than 0
 		perror("ERROR: Failed to fork child");
 		exit(1);
 	} else if (pid == 0) {
 		// you are in the child
+
 		//store the pid so it can be killed with ctrl c
 		recentPID = getpid();
 		if (execvp(args[0], args) < 0) {
 			perror("ERROR: failure in execvp");
+			_exit(1);
 		}
-
 		// old way before i parsed arguments
 		// implementation used in system()
 		// pretty sure this makes another shell inside the child
@@ -154,7 +177,7 @@ int my_systemF(char* line) {
 	}
 
 
-	return 0;
+	return 1;
 }
 
 /*my_system is a functions that create a child process and
@@ -172,22 +195,7 @@ int my_systemV(char* line) {
 	//hijack process to exit on exit and change directory on cd
 	//since these are not executable commands in the regular sense
 	if (strcmp(*args, "exit") == 0) {
-		exit(0);
-	}
-	// TODO: this is the wrong way to do this (works but doesnt have the expected behaviour with clone)
-	else if (strcmp(*args, "cd") == 0) {
-		//allow soft fails through return statements instead of exit
-		if (args[1] == NULL) {
-			printf("%s\n", "ERROR: missing cd arg");
-			return 1;
-		} else {
-			if (chdir(args[1]) != 0) {
-				perror("ERROR: could not change directory");
-				return 1;
-			}
-			//cd is the command, dont attempt to exec after
-			return 0;
-		}
+		exit(0); //not actually in the child process so use regular exit
 	}
 
 	//prepend "/bin/" so that commands can be found
@@ -214,6 +222,7 @@ int my_systemV(char* line) {
 		recentPID = getpid();
 		if (execve(args[0], args, envp) < 0) {
 			perror("ERROR: failure in execve");
+			_exit(1);
 		}
 	} else {
 		// you're in parent
@@ -236,29 +245,6 @@ int my_systemV(char* line) {
 int my_system(char* line) {
 	//signal handler to hijack ctrl+c
 	signal(SIGINT, intHandler);
-	// char* args[512];
-	// //parse
-	// parseCommand(line, args);
-	// //hijack process to exit on exit and change directory on cd
-	// //since these are not executable commands in the regular sense
-	// if (strcmp(*args, "exit") == 0) {
-	// 	exit(0);
-	// }
-	// // TODO: this is the wrong way to do this (works but doesnt have the expected behaviour with clone)
-	// else if (strcmp(*args, "cd") == 0) {
-	// 	//allow soft fails through return statements instead of exit
-	// 	if (args[1] == NULL) {
-	// 		printf("%s\n", "ERROR: missing cd arg");
-	// 		return 1;
-	// 	} else {
-	// 		if (chdir(args[1]) != 0) {
-	// 			perror("ERROR: could not change directory");
-	// 			return 1;
-	// 		}
-	// 		//cd is the command, dont attempt to exec after
-	// 		return 0;
-	// 	}
-	// }
 #ifdef FORK
 	my_systemF(line);
 #elif VFORK
