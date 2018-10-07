@@ -95,7 +95,7 @@ int clone_function(void* arg) {
 
 /*my_system is a functions that create a child process and
 runs the command you passed as the argument*/
-int my_systemF(char** args) {
+int my_systemF(char* line) {
 	pid_t pid; 	//this is the child's PID in the parent process (or -1 if fail and no child created)
 	//this is 0 in the child process
 	int status;
@@ -159,7 +159,7 @@ int my_systemF(char** args) {
 
 /*my_system is a functions that create a child process and
 runs the command you passed as the argument*/
-int my_systemV(char** args) {
+int my_systemV(char* line) {
 	pid_t pid; 	//this is the child's PID in the parent process (or -1 if fail and no child created)
 	//this is 0 in the child process
 	int status;
@@ -260,11 +260,11 @@ int my_system(char* line) {
 	// 	}
 	// }
 #ifdef FORK
-	my_systemF(args);
+	my_systemF(line);
 #elif VFORK
-	my_systemV(args);
+	my_systemV(line);
 #elif CLONE
-	clone_function(args); //something
+	clone_function(line); //something
 #elif PIPE
 	//something
 #else
