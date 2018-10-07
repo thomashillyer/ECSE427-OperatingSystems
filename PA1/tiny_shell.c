@@ -8,7 +8,7 @@
 #include <sys/wait.h> //for waitpid
 #include <time.h> //for timing
 
-#define STACK_SIZE (1024 * 1024) //random size 
+#define STACK_SIZE (1024 * 1024) //arbitrary size 
 
 int recentPID = 0;
 
@@ -240,6 +240,7 @@ int my_systemV(char* line) {
 	return 1;
 }
 
+//this does not work
 int pipe_function(char* line) {
 	int fd1[2]; //this is the two ends of the pipe, fd[0] reading, fd[1] writing
 	int fd2[2];
@@ -285,13 +286,6 @@ int pipe_function(char* line) {
 			perror("ERROR: failure in execvp");
 			_exit(1);
 		}
-		// old way before i parsed arguments
-		// implementation used in system()
-		// pretty sure this makes another shell inside the child
-		// if(execl("/bin/sh", "sh", "-c", &line, (char*) 0)<0){
-		// 	printf("%s\n", "ERROR: failed to execute command");
-		// 	exit(1);
-		// }
 
 	} else {
 		close(0); //close stdin
