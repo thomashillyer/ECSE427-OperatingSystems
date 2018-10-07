@@ -82,6 +82,7 @@ static int child_function(void* arg) { //startup function for cloned child
 
 int clone_function(void* line) {
 
+	struct timespec start, finish; //start and end structs for timing
 	char* args[512];
 	//parse
 	parseCommand(line, args);
@@ -93,11 +94,10 @@ int clone_function(void* line) {
 	            CLONE_FS | //child shares filesystem info (for use with chdir)
 	            CLONE_FILES | //child shares file descriptor table
 	            CLONE_SIGHAND | //child shares signal handler table
-	            CLONE_THREAD;// | //child is placed in the same thread group as caller (must be with clone_sighand and clone_vm)
-	CLONE_SETTLS | //thread local storage descriptor is set to newtls
-	CLONE_PARENT_SETTID | //store child thread id @ ptid in parent
-	CLONE_CHILD_CLEARTID | //store child thread id @ ctid in child
-	CLONE_SYSVSEM; //child shares sys V semaphore adjustment vals with caller
+	            CLONE_THREAD | //child is placed in the same thread group as caller (must be with clone_sighand and clone_vm)
+	            CLONE_PARENT_SETTID | //store child thread id @ ptid in parent
+	            CLONE_CHILD_CLEARTID | //store child thread id @ ctid in child
+	            CLONE_SYSVSEM; //child shares sys V semaphore adjustment vals with caller
 
 	pid_t pid; //for waitpid
 	int status; //for waitpid
@@ -111,22 +111,23 @@ int clone_function(void* line) {
 		exit(1);
 	}
 	stackTop = stack + STACK_SIZE; // assuming stack grows down, -1 to prevent overflow
-	// printf("parent pid = %d\n", getpid());
+
+	clock_gettime(CLOCK_REALTIME, &start); //record the start time
 	// the clone command uses childfunc as the starting function, the child terminates when the childfunc terminates
-	//if ((pid = clone(child_function, stackTop, flags | SIGCHLD, (void *) &fd)) == -1) {
 	if ((pid = clone(child_function, stackTop, flags | SIGCHLD, args)) == -1) {
 		fprintf(stderr,  "ERROR with clone\n");
 		free(stack);
 		exit(1);
 	}
 	// else {
-	// printf("child pid = %d\n", pid);
 	// do {
-		waitpid(pid, &status, __WCLONE);
+	waitpid(pid, &status, __WCLONE);
+
+	clock_gettime(CLOCK_REALTIME, &finish); //record the end time
+	long ns = finish.tv_nsec - start.tv_nsec;
+	printf("nanoseconds: %ld\n", ns); // print the time it took
 	// } while (!WIFEXITED(status));
 	// waitpid(pid, &status, 0);
-	// printf("done\n");
-	// sleep(5);
 	return 0;
 	// }
 	// return 1;
@@ -135,6 +136,8 @@ int clone_function(void* line) {
 /*my_system is a functions that create a child process and
 runs the command you passed as the argument*/
 int my_systemF(char* line) {
+	struct timespec start, finish; //start and end structs for timing
+
 	pid_t pid; 	//this is the child's PID in the parent process (or -1 if fail and no child created)
 	//this is 0 in the child process
 	int status;
@@ -148,6 +151,8 @@ int my_systemF(char* line) {
 	if (strcmp(*args, "exit") == 0) {
 		exit(0); //not actually in the child so use the regular exit
 	}
+
+	clock_gettime(CLOCK_REALTIME, &start); //record the start time
 	if ((pid = fork()) == -1) { //maybe less than 0
 		perror("ERROR: Failed to fork child");
 		exit(1);
@@ -160,13 +165,6 @@ int my_systemF(char* line) {
 			perror("ERROR: failure in execvp");
 			_exit(1);
 		}
-		// old way before i parsed arguments
-		// implementation used in system()
-		// pretty sure this makes another shell inside the child
-		// if(execl("/bin/sh", "sh", "-c", &line, (char*) 0)<0){
-		// 	printf("%s\n", "ERROR: failed to execute command");
-		// 	exit(1);
-		// }
 
 	} else {
 		// you're in parent
@@ -174,6 +172,10 @@ int my_systemF(char* line) {
 
 		//if >0 wait for child pid, if 0 wait for any child of the caller (parent)
 		waitpid(pid, &status, 0);
+
+		clock_gettime(CLOCK_REALTIME, &finish); //record the end time
+		long ns = finish.tv_nsec - start.tv_nsec;
+		printf("nanoseconds: %ld\n", ns); // print the time it took
 	}
 
 
@@ -186,8 +188,8 @@ int my_systemV(char* line) {
 	pid_t pid; 	//this is the child's PID in the parent process (or -1 if fail and no child created)
 	//this is 0 in the child process
 	int status;
-	struct timespec start, finish;
-	char* envp[] = {"key=value", '\0'};
+	struct timespec start, finish; //start and end structs for timing
+	char* envp[] = {"key=value", '\0'}; //blank test variables
 
 	char* args[512];
 	//parse
@@ -232,15 +234,83 @@ int my_systemV(char* line) {
 
 		clock_gettime(CLOCK_REALTIME, &finish);
 		long ns = finish.tv_nsec - start.tv_nsec;
-		if (start.tv_nsec > finish.tv_nsec)
-		{	// clock underflow
-			ns += 1000000000;
-		}
 		printf("nanoseconds: %ld\n", ns);
 		return 0;
 	}
 	return 1;
 }
+
+int pipe_function(char* line) {
+	int fd1[2]; //this is the two ends of the pipe, fd[0] reading, fd[1] writing
+	int fd2[2];
+	pid_t pid; 	//this is the child's PID in the parent process (or -1 if fail and no child created)
+	//this is 0 in the child process
+	int status;
+
+	char* args[512];
+	//parse
+	parseCommand(line, args);
+
+	//hijack process to exit on exit and change directory on cd
+	//since these are not executable commands in the regular sense
+	if (strcmp(*args, "exit") == 0) {
+		exit(0); //not actually in the child so use the regular exit
+	}
+
+	//create a pipe
+	if (pipe(fd1) == -1) {
+		perror("ERROR: pipe1 failed");
+		exit(1);
+	}
+	// if(pipe(fd2)==-1){
+	// 	perror("ERROR: pipe2 failed");
+	// 	exit(1);
+	// }
+
+	if ((pid = fork()) == -1) { //maybe less than 0
+		perror("ERROR: Failed to fork child");
+		exit(1);
+	} else if (pid == 0) {
+		// you are in the child
+		close(1); //close stdout in child
+		dup(fd1[1]); //duplicate fd1[1] in stdout's default spot
+
+		// close(0); //close stdin in child
+		// dup(fd2[0]); //duplicate fd2[0] (reading end) in stdin's default spot
+		// close(fd1[0]); //close reading end in child
+
+		//store the pid so it can be killed with ctrl c
+		recentPID = getpid();
+		if (execvp(args[0], args) < 0) {
+			perror("ERROR: failure in execvp");
+			_exit(1);
+		}
+		// old way before i parsed arguments
+		// implementation used in system()
+		// pretty sure this makes another shell inside the child
+		// if(execl("/bin/sh", "sh", "-c", &line, (char*) 0)<0){
+		// 	printf("%s\n", "ERROR: failed to execute command");
+		// 	exit(1);
+		// }
+
+	} else {
+		close(0); //close stdin
+		dup(fd1[0]); //duplicate fd1[0] (reading end) in stdins default spot
+
+		// close(1); //close stdout
+		// dup(fd2[1]); //duplicate fd2[1] (writing end) in stdouts default spot
+		// close(fd1[1]); //close writing end in parent
+		// you're in parent
+		// wait for child
+
+		//if >0 wait for child pid, if 0 wait for any child of the caller (parent)
+		waitpid(pid, &status, 0);
+	}
+
+
+	return 1;
+}
+
 
 int my_system(char* line) {
 	//signal handler to hijack ctrl+c
@@ -250,12 +320,18 @@ int my_system(char* line) {
 #elif VFORK
 	my_systemV(line);
 #elif CLONE
-	clone_function(line); //something
+	clone_function(line);
 #elif PIPE
-	//something
+	// should probably break out a separate function to
+	// create the pipe and call the existing fork() implementation
+	pipe_function(line);
 #else
-	printf("Regular System call:\n");
+	struct timespec start, finish; //start and end structs for timing
+	clock_gettime(CLOCK_REALTIME, &start); //start
 	system(line);
+	clock_gettime(CLOCK_REALTIME, &finish); //stop
+	long ns = finish.tv_nsec - start.tv_nsec;
+	printf("nanoseconds: %ld\n", ns);
 #endif
 }
 
